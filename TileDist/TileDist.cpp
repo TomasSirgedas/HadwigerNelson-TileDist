@@ -1,14 +1,17 @@
 #include "TileDist.h"
 #include "Util.h"
+#include "Delauney.h"
 #include <QPainter>
 #include <QLabel>
 #include <QMouseEvent>
 #include <vector>
 #include <functional>
 
+
 class Vertex
 {
 public:
+   int _Index;
    int _Color;
    XYZ _Pos;
 };
@@ -43,6 +46,7 @@ public:
    bool isNull() const { return _Vertex == nullptr; }
    int color() const { return _Vertex->_Color; }
    XYZ pos() const { return _GraphShape->pos( _Vertex->_Pos, _Sector ); }
+   int rawIndex() const { return _Vertex->_Index; }
 
 public:
    const IGraphShape* _GraphShape = nullptr;
@@ -53,6 +57,14 @@ public:
 class Simulation : public IGraphShape
 {
 public:
+   Simulation()
+   {
+      double scale = 3.1;
+      _U = XYZ( 1, 0, 0 ) * scale;
+      _V = XYZ( .5, sqrt(.75), 0 ) * scale;
+      _InvUV = Matrix4x4( XYZW( _U.x, _U.y, 0, 0 ), XYZW( _V.x, _V.y, 0, 0 ), XYZW( 0, 0, 1, 0 ), XYZW( 0, 0, 0, 1 ) ).inverted();
+   }
+
    XYZ pos( const XYZ& position, const Sector& sector ) const override { return position + _U * sector.x + _V * sector.y; }
    std::vector<Sector> sectors() const
    {
@@ -74,6 +86,16 @@ public:
       }
       return ret;
    }
+   std::vector<VertexPtr> rawVertices() const
+   {
+      std::vector<VertexPtr> ret;
+      Sector sector = { 0, 0 };
+      for ( const Vertex& a : _Vertices )
+      {
+         ret.push_back( VertexPtr( &a, sector, this ) );
+      }
+      return ret;
+   }
    VertexPtr vertexAt( const XYZ& pos, double maxDist ) const
    {
       VertexPtr ret;
@@ -89,16 +111,69 @@ public:
       return ret;
    }
    Vertex* mutableOf( const Vertex* vertex ) const { return const_cast<Vertex*>( vertex ); }
-   void setPos( const VertexPtr& a, const XYZ& relativePos )
+   void setPos( const VertexPtr& a, const XYZ& pos )
    {
-      XYZ absolutePos = pos( relativePos, -a._Sector );
-      mutableOf( a._Vertex )->_Pos = absolutePos;
+      //XYZ absolutePos = pos( pos, -a._Sector );
+      //mutableOf( a._Vertex )->_Pos = absolutePos;
+
+      XYZW uv = _InvUV * pos;
+      mutableOf( a._Vertex )->_Pos = normalizedPos( pos );
+   }
+   XYZ normalizedPos( const XYZ& p ) const
+   {
+      XYZW uv = _InvUV * p;
+      return p - ( _U * floor( uv.x ) + _V * floor( uv.y ) );
+   }
+
+   void step()
+   {
+      double D = 1.;
+
+      std::vector<XYZ> vel( _Vertices.size() );
+
+      for ( const VertexPtr& a : rawVertices() )
+      {
+         XYZ posA = a.pos();
+         for ( const VertexPtr& b : vertices() )
+         {
+            if ( a == b )
+               continue;
+            XYZ posB = b.pos();
+
+            double dist2 = posA.dist2( posB );
+            if ( dist2 >= D*D ) 
+               continue;
+            double dist = sqrt( dist2 );
+            double distError = D - dist;
+
+            vel[a.rawIndex()] += ( posA - posB ).normalized() * distError * .1;
+         }
+      }
+
+      for ( const VertexPtr& a : rawVertices() )
+      {
+         if ( vel[a.rawIndex()].len() > .1 )
+            vel[a.rawIndex()] = vel[a.rawIndex()].normalized() * .1;
+      }
+
+      for ( const VertexPtr& a : rawVertices() )
+      {
+         if ( a._Vertex != _ClickedVertex._Vertex )
+            setPos( a, a.pos() + vel[a.rawIndex()] );
+      }
+   }
+
+   void step( int numSteps )
+   {
+      for ( int i = 0; i < numSteps; i++ )
+         step();
    }
 
 public:
    std::vector<Vertex> _Vertices;
-   XYZ _U = XYZ( 3, 0, 0 );
-   XYZ _V = XYZ( 1.5, 3 * sqrt(.75), 0 );
+   XYZ _U;
+   XYZ _V;
+   Matrix4x4 _InvUV;
 
 public:
    VertexPtr _ClickedVertex;
@@ -191,8 +266,8 @@ public:
             XYZ pos = a.pos();
             painter.drawEllipse( toBitmap( pos ), 4, 4 );
 
-            if ( a == _Simulation->_ClickedVertex )
-               painter.drawEllipse( toBitmap( pos ), 6, 6 );
+            //if ( a == _Simulation->_ClickedVertex )
+            //   painter.drawEllipse( toBitmap( pos ), 6, 6 );
          }
       }
       _Label->setPixmap( QPixmap::fromImage( img ) );
@@ -225,9 +300,14 @@ TileDist::TileDist( QWidget* parent )
    : QWidget( parent )
 {
    _Simulation.reset( new Simulation );   
-   _Simulation->_Vertices.push_back( Vertex { 0, XYZ( 0, 0, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 1, XYZ( 1, 0, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 2, XYZ( 1, 1, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 0, 0, XYZ( 0, 0, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 1, 1, XYZ( 1, 0, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 2, 2, XYZ( 2, 0.1, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 3, 3, XYZ( 2.5, 0, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 4, 4, XYZ( 1, 1, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 5, 5, XYZ( 2, 1, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 6, 6, XYZ( 3, 1.1, 0 ) } );
+   _Simulation->_Vertices.push_back( Vertex { 7, 7, XYZ( 2.1, 2, 0 ) } );
 
    ui.setupUi( this );
    ui.horizontalLayout->removeWidget( ui.drawingPlaceholder );
@@ -253,6 +333,20 @@ TileDist::TileDist( QWidget* parent )
          _Simulation->setPos( _Simulation->_ClickedVertex, clickPos );
       redraw();
    };
+
+   connect( &_PlayTimer, &QTimer::timeout, [&] { _Simulation->step( 50 ); redraw(); } );
+
+   connect( ui.playButton, &QPushButton::clicked, [&]() 
+   { 
+      if ( _PlayTimer.isActive() )
+         _PlayTimer.stop();
+      else
+         _PlayTimer.start();   
+   } );
+
+
+   _PlayTimer.setInterval( 16 );
+   ui.playButton->click();
 }
 
 void TileDist::redraw()

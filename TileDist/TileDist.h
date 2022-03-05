@@ -5,6 +5,7 @@
 
 #include "DataTypes.h"
 #include <memory>
+#include <QTimer>
 
 class Drawing;
 class Simulation;
@@ -19,6 +20,8 @@ public:
 
 private:
    Ui::TileDistClass ui;
+
+   QTimer _PlayTimer;
 
    Drawing* _Drawing;
    std::shared_ptr<Simulation> _Simulation;
