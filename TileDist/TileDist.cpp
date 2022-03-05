@@ -235,6 +235,23 @@ public:
          QPainter painter( &img );
          painter.setRenderHint( QPainter::Antialiasing );
 
+         // draw delauney
+         {
+            painter.setPen( QPen( QColor( 0, 0, 0, 64 ), 1 ) );
+
+            std::vector<VertexPtr> vertices = _Simulation->vertices();
+            std::vector<XYZ> v;
+            for ( const VertexPtr& a : vertices )
+               v.push_back( a.pos() );
+            auto triangulation = delauney( v );
+            for ( const auto& tri : triangulation )
+            {
+               painter.drawLine( toBitmap( vertices[tri[0]].pos() ), toBitmap( vertices[tri[1]].pos() ) );
+               painter.drawLine( toBitmap( vertices[tri[1]].pos() ), toBitmap( vertices[tri[2]].pos() ) );
+               painter.drawLine( toBitmap( vertices[tri[2]].pos() ), toBitmap( vertices[tri[0]].pos() ) );
+            }
+         }
+
          // draw _U, _V
          painter.setPen( QPen( QColor( 128, 0, 0, 64 ), 5 ) );
          {
