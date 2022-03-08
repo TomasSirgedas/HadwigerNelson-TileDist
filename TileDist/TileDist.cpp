@@ -137,11 +137,11 @@ public:
    Vertex* mutableOf( const Vertex* vertex ) const { return const_cast<Vertex*>( vertex ); }
    void setPos( const VertexPtr& a, const XYZ& pos )
    {
-      //XYZ absolutePos = pos( pos, -a._Sector );
-      //mutableOf( a._Vertex )->_Pos = absolutePos;
-
-      XYZW uv = _InvUV * pos;
       mutableOf( a._Vertex )->_Pos = normalizedPos( pos );
+   }
+   void setColor( const VertexPtr& a, int color )
+   {
+      mutableOf( a._Vertex )->_Color = color;
    }
    Sector sectorAt( const XYZ& p ) const
    {
@@ -542,7 +542,15 @@ XYZ TileDist::mousePos() const
 
 void TileDist::addVertex( int color )
 {
-   _Simulation->addVertex( mousePos(), color );
+   VertexPtr a = _Simulation->vertexAt( mousePos(), _Drawing->toModel( 30 ) );
+   if ( a )
+   {
+      _Simulation->setColor( a, color );
+   }
+   else
+   {
+      _Simulation->addVertex( mousePos(), color );
+   }
 }
 
 void TileDist::deleteVertex()
