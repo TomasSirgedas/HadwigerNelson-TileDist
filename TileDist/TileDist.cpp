@@ -6,9 +6,14 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QShortCut>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonDocument>
 
 #include <vector>
 #include <functional>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace
 {
@@ -77,7 +82,7 @@ class Simulation : public IGraphShape
 public:
    Simulation()
    {
-      double scale = 3.1;
+      double scale = 2.4;
       _U = XYZ( 1, 0, 0 ) * scale;
       _V = XYZ( .5, sqrt(.75), 0 ) * scale;
       _InvUV = Matrix4x4( XYZW( _U.x, _U.y, 0, 0 ), XYZW( _V.x, _V.y, 0, 0 ), XYZW( 0, 0, 1, 0 ), XYZW( 0, 0, 0, 1 ) ).inverted();
@@ -212,14 +217,26 @@ public:
          _Vertices[i]._Index = i;
    }
 
-   std::vector<VertexPtr> verticesInRange( double R )
+   std::vector<VertexPtr> verticesInRange( double R ) const
    {
-
+      std::vector<VertexPtr> ret;
+      Sector sector;
+      for ( sector.y = -10; sector.y <= 10; sector.y++ )
+      for ( sector.x = -10; sector.x <= 10; sector.x++ )
+      for ( const Vertex& aa : _Vertices )
+      {
+         VertexPtr a( &aa, sector, this );
+         XYZ pos = a.pos();
+         if ( pos.len2() > R*R )
+            continue;
+         ret.push_back( a );
+      }
+      return ret;
    }
 
 public:
    std::vector<Vertex> _Vertices;
-   double _MinDistanceAllowed = 1.;
+   double _MinDistanceAllowed = .75;
    double _MinDistanceAllowed_SameColor = 2.;
    XYZ _U;
    XYZ _V;
@@ -389,27 +406,27 @@ TileDist::TileDist( QWidget* parent )
    ui.horizontalLayout->insertWidget( 0, _Drawing );
 
 
-   _Drawing->_OnLeftPressFunc = [&]( XYZ clickPos )
+   _Drawing->_OnLeftPressFunc = [this]( XYZ clickPos )
    {
       _Simulation->_ClickedVertex = _Simulation->vertexAt( clickPos, _Drawing->toModel( 30 ) );
       //redraw();
       _Drawing->_OnMouseMoveFunc( clickPos );
    };
-   _Drawing->_OnLeftReleaseFunc = [&]( XYZ clickPos )
+   _Drawing->_OnLeftReleaseFunc = [this]( XYZ clickPos )
    {
       _Simulation->_ClickedVertex = VertexPtr();
       redraw();
    };
-   _Drawing->_OnMouseMoveFunc = [&]( XYZ clickPos )
+   _Drawing->_OnMouseMoveFunc = [this]( XYZ clickPos )
    {
       if ( _Simulation->_ClickedVertex )
          _Simulation->setPos( _Simulation->_ClickedVertex, clickPos );
       redraw();
    };
 
-   connect( &_PlayTimer, &QTimer::timeout, [&] { _Simulation->step( 50 ); redraw(); } );
+   connect( &_PlayTimer, &QTimer::timeout, [this] { _Simulation->step( 50 ); redraw(); } );
 
-   connect( ui.playButton, &QPushButton::clicked, [&]() 
+   connect( ui.playButton, &QPushButton::clicked, [this]() 
    { 
       if ( _PlayTimer.isActive() )
          _PlayTimer.stop();
@@ -417,6 +434,10 @@ TileDist::TileDist( QWidget* parent )
          _PlayTimer.start();   
 
       ui.playButton->setText( _PlayTimer.isActive() ? "||" : ">" );
+   } );
+   connect( ui.exportButton, &QPushButton::clicked, [this]() 
+   { 
+      exportAsDual();
    } );
 
    connect( ui.tensionSlider, &QSlider::valueChanged, [this]( int value ) {
@@ -427,15 +448,6 @@ TileDist::TileDist( QWidget* parent )
       redraw();
    } );
    ui.tensionSlider->valueChanged( ui.tensionSlider->value() );
-
-
-   connect( ui.tensionSlider, &QSlider::valueChanged, [this]( int value ) {
-      double t = (double) value / ui.tensionSlider->maximum();
-      //ui.outerRadiusEdit->setText( QString("%1").arg( r ) );
-      _Simulation->_Tension = interpolateExp( t, .001, 1. );
-      //updateModelFromUI();
-      redraw();
-   } );
 
    connect( ui.showTriangulationCheckBox, &QCheckBox::toggled, [this]() {
       _Drawing->_ShowTriangulation = ui.showTriangulationCheckBox->isChecked();
@@ -539,4 +551,77 @@ void TileDist::deleteVertex()
    if ( !a )
       return;
    _Simulation->deleteVertex( a );
+}
+
+QJsonArray toJson( const XYZ& p )
+{
+   return QJsonArray { p.x, p.y, p.z };
+}
+
+QJsonArray neighborsToJson( const std::vector<int>& v )
+{
+   QJsonArray ret;
+   for ( int x : v )
+      ret.append( QJsonObject { {"index", x}, {"sector", 0} } );
+   return ret;
+}
+
+QJsonObject toJson( const std::vector<Vertex>& vertices, const std::vector<std::vector<int>>& neighbors )
+{
+   QJsonArray vertexArray;
+   for ( int i = 0; i < (int) vertices.size(); i++ )
+   {
+      const auto& a = vertices[i];
+      vertexArray.append( QJsonObject { {"index", i}, {"color", vertices[i]._Color}, {"pos", toJson( a._Pos ) }, {"neighbors", neighborsToJson( neighbors[i] )} } );
+   }
+
+   return QJsonObject { { "symmetry", QJsonValue() }, { "shape", QJsonObject { { "type", "plane" } } }, { "vertices", vertexArray } };   
+}
+
+void TileDist::exportAsDual()
+{   
+   double R = ui.exportRadiusLineEdit->text().toDouble();
+   std::vector<VertexPtr> vertices = _Simulation->verticesInRange( R + 2 );
+   std::sort( vertices.begin(), vertices.end(), []( const VertexPtr& a, const VertexPtr& b ) { return a.pos().len2() < b.pos().len2(); } );
+   int numValidVertices;
+   for ( numValidVertices = 0; numValidVertices < (int) vertices.size(); numValidVertices++ )
+      if ( vertices[numValidVertices].pos().len2() >= R*R )
+         break;
+   std::vector<std::vector<int>> triangulation;
+   {
+      std::vector<XYZ> v;
+      for ( int i = 0; i < (int) vertices.size(); i++ )
+         v.push_back( vertices[i].pos() );
+      triangulation = delauney( v );
+   }
+
+   // construct output graph
+   std::vector<Vertex> v;
+   std::vector<std::vector<int>> neighbors( numValidVertices );
+   {
+      std::vector<std::unordered_set<int>> neighbs( numValidVertices );
+      for ( const std::vector<int>& v : triangulation )
+      {
+         if ( v[0] >= numValidVertices || v[1] >= numValidVertices || v[2] >= numValidVertices ) continue;
+         neighbs[v[0]].insert( v[1] );
+         neighbs[v[0]].insert( v[2] );
+         neighbs[v[1]].insert( v[2] );
+         neighbs[v[1]].insert( v[0] );
+         neighbs[v[2]].insert( v[0] );
+         neighbs[v[2]].insert( v[1] );
+      }
+
+      for ( int i = 0; i < numValidVertices; i++ )
+         v.push_back( Vertex { i, vertices[i].color(), vertices[i].pos() } );
+      for ( int i = 0; i < numValidVertices; i++ )
+         neighbors[i] = std::vector<int>( neighbs[i].begin(), neighbs[i].end() );
+   }
+
+   // write to file
+   {
+      QString filename = "test.dual";
+      QFile f( filename );
+      f.open( QFile::WriteOnly );
+      f.write( QJsonDocument( toJson( v, neighbors ) ).toJson() );
+   }
 }

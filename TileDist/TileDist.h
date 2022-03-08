@@ -20,6 +20,7 @@ public:
    void addVertex( int color );
    XYZ mousePos() const;
    void deleteVertex();
+   void exportAsDual();
 
 private:
    Ui::TileDistClass ui;
