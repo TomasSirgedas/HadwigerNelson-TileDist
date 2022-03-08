@@ -28,6 +28,10 @@ namespace
       double ret = s.toDouble( &ok );
       return ok ? ret : default;
    }
+   void drawTextCentered( QPainter& painter, const QPointF& p, const std::string& str )
+   {
+      painter.drawText( QRectF( p + QPointF( -1000, -1000 ), QSizeF( 2000, 2000 ) ), QString::fromStdString( str ), QTextOption( Qt::AlignCenter ) );
+   }
 }
 
 
@@ -345,12 +349,19 @@ public:
          //}
 
          // draw vertices
+         painter.setFont( QFont( "Arial", 10 ) );
+
          painter.setPen( QPen( QColor( 0, 0, 0 ), 1 ) );
          for ( const VertexPtr& a : _Simulation->vertices() )
          {
             painter.setBrush( tileColor( a.color() ) );
             XYZ pos = a.pos();
             painter.drawEllipse( toBitmap( pos ), 4, 4 );
+
+            if ( _ShowColorNumber )
+            {
+               drawTextCentered( painter, toBitmap( pos ) + QPointF( 0, -11 ), std::to_string( a.color() ) );
+            }
 
             //if ( a == _Simulation->_ClickedVertex )
             //   painter.drawEllipse( toBitmap( pos ), 6, 6 );
@@ -375,6 +386,7 @@ public:
 
 public:
    bool _ShowTriangulation;
+   bool _ShowColorNumber;
 
 public:
    Matrix4x4 _ModelToBitmap;
@@ -454,6 +466,13 @@ TileDist::TileDist( QWidget* parent )
       redraw();
    } );
    ui.showTriangulationCheckBox->toggled( ui.showTriangulationCheckBox->isChecked() );
+
+   connect( ui.showColorNumberCheckBox, &QCheckBox::toggled, [this]() {
+      _Drawing->_ShowColorNumber = ui.showColorNumberCheckBox->isChecked();
+      redraw();
+   } );
+   ui.showColorNumberCheckBox->toggled( ui.showTriangulationCheckBox->isChecked() );
+   
 
    connect( ui.uxLineEdit, &QLineEdit::editingFinished, [this]() {
       _Simulation->_U.x = ui.uxLineEdit->text().toDouble();

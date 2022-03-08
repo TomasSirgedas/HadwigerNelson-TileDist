@@ -146,7 +146,7 @@
          </widget>
         </item>
         <item>
-         <widget class="QLineEdit" name="minDistSameLineEdit"/>
+         <widget class="QLineEdit" name="minDistDiffLineEdit"/>
         </item>
        </layout>
       </item>
@@ -160,17 +160,24 @@
          </widget>
         </item>
         <item>
-         <widget class="QLineEdit" name="minDistDiffLineEdit"/>
+         <widget class="QLineEdit" name="minDistSameLineEdit"/>
         </item>
        </layout>
       </item>
       <item>
        <widget class="QCheckBox" name="showTriangulationCheckBox">
         <property name="text">
-         <string>Show Triangulation</string>
+         <string>Show triangulation</string>
         </property>
         <property name="checked">
          <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="showColorNumberCheckBox">
+        <property name="text">
+         <string>Show color # </string>
         </property>
        </widget>
       </item>
