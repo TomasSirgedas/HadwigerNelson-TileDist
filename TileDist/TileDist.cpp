@@ -1,11 +1,29 @@
 #include "TileDist.h"
 #include "Util.h"
 #include "Delauney.h"
+
 #include <QPainter>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QShortCut>
+
 #include <vector>
 #include <functional>
+
+namespace
+{
+   void killFocus( QWidget* w )
+   {
+      if ( w->hasFocus() )
+         QApplication::focusWidget()->clearFocus();
+   }
+   double toDouble( const QString& s, double default=0 )
+   {
+      bool ok;
+      double ret = s.toDouble( &ok );
+      return ok ? ret : default;
+   }
+}
 
 
 class Vertex
@@ -65,7 +83,8 @@ public:
       _InvUV = Matrix4x4( XYZW( _U.x, _U.y, 0, 0 ), XYZW( _V.x, _V.y, 0, 0 ), XYZW( 0, 0, 1, 0 ), XYZW( 0, 0, 0, 1 ) ).inverted();
    }
 
-   XYZ pos( const XYZ& position, const Sector& sector ) const override { return position + _U * sector.x + _V * sector.y; }
+   XYZ pos( const Sector& sector ) const { return _U * sector.x + _V * sector.y; }
+   XYZ pos( const XYZ& position, const Sector& sector ) const override { return position + pos( sector ); }
    std::vector<Sector> sectors() const
    {
       std::vector<Sector> ret;
@@ -119,15 +138,18 @@ public:
       XYZW uv = _InvUV * pos;
       mutableOf( a._Vertex )->_Pos = normalizedPos( pos );
    }
-   XYZ normalizedPos( const XYZ& p ) const
+   Sector sectorAt( const XYZ& p ) const
    {
       XYZW uv = _InvUV * p;
-      return p - ( _U * floor( uv.x ) + _V * floor( uv.y ) );
+      return Sector{ (int)floor( uv.x ), (int)floor( uv.y ) };
    }
-
+   XYZ normalizedPos( const XYZ& p ) const
+   {
+      return p - pos( sectorAt( p ) );
+   }
    void step()
    {
-      double D = 1.;
+      constexpr double MAX_VEL = .1;
 
       std::vector<XYZ> vel( _Vertices.size() );
 
@@ -140,20 +162,22 @@ public:
                continue;
             XYZ posB = b.pos();
 
+            double minDist = a.color() == b.color() ? _MinDistanceAllowed_SameColor : _MinDistanceAllowed;
+
             double dist2 = posA.dist2( posB );
-            if ( dist2 >= D*D ) 
+            if ( dist2 >= minDist*minDist ) 
                continue;
             double dist = sqrt( dist2 );
-            double distError = D - dist;
+            double distError = minDist - dist;
 
-            vel[a.rawIndex()] += ( posA - posB ).normalized() * distError * .1;
+            vel[a.rawIndex()] += ( posA - posB ).normalized() * distError * _Tension;
          }
       }
 
       for ( const VertexPtr& a : rawVertices() )
       {
          if ( vel[a.rawIndex()].len() > .1 )
-            vel[a.rawIndex()] = vel[a.rawIndex()].normalized() * .1;
+            vel[a.rawIndex()] = vel[a.rawIndex()].normalized() * MAX_VEL;
       }
 
       for ( const VertexPtr& a : rawVertices() )
@@ -169,11 +193,38 @@ public:
          step();
    }
 
+   void addVertex( const XYZ& pos, int color )
+   {
+      Vertex a { (int) _Vertices.size(), color, pos };
+      _Vertices.push_back( a );
+   }
+
+   void deleteVertex( const VertexPtr& a )
+   {  
+      int index = a.rawIndex();
+      if ( index < 0 || index >= (int) _Vertices.size() )
+         return;
+
+      _Vertices.erase( _Vertices.begin() + index );
+
+      // renumber
+      for ( int i = index; i < (int) _Vertices.size(); i++ )
+         _Vertices[i]._Index = i;
+   }
+
+   std::vector<VertexPtr> verticesInRange( double R )
+   {
+
+   }
+
 public:
    std::vector<Vertex> _Vertices;
+   double _MinDistanceAllowed = 1.;
+   double _MinDistanceAllowed_SameColor = 2.;
    XYZ _U;
    XYZ _V;
    Matrix4x4 _InvUV;
+   double _Tension = 0;
 
 public:
    VertexPtr _ClickedVertex;
@@ -236,6 +287,7 @@ public:
          painter.setRenderHint( QPainter::Antialiasing );
 
          // draw delauney
+         if ( _ShowTriangulation )
          {
             painter.setPen( QPen( QColor( 0, 0, 0, 64 ), 1 ) );
 
@@ -305,6 +357,9 @@ public:
    std::function<void(XYZ)> _OnMouseMoveFunc;
 
 public:
+   bool _ShowTriangulation;
+
+public:
    Matrix4x4 _ModelToBitmap;
    const Simulation* _Simulation;
 };
@@ -317,14 +372,14 @@ TileDist::TileDist( QWidget* parent )
    : QWidget( parent )
 {
    _Simulation.reset( new Simulation );   
-   _Simulation->_Vertices.push_back( Vertex { 0, 0, XYZ( 0, 0, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 1, 1, XYZ( 1, 0, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 2, 2, XYZ( 2, 0.1, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 3, 3, XYZ( 2.5, 0, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 4, 4, XYZ( 1, 1, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 5, 5, XYZ( 2, 1, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 6, 6, XYZ( 3, 1.1, 0 ) } );
-   _Simulation->_Vertices.push_back( Vertex { 7, 7, XYZ( 2.1, 2, 0 ) } );
+   _Simulation->addVertex( XYZ( 0, 0, 0 ), 0 );
+   _Simulation->addVertex( XYZ( 1, 0, 0 ), 1 );
+   _Simulation->addVertex( XYZ( 2, 0.1, 0 ), 2 );
+   _Simulation->addVertex( XYZ( 2.5, 0, 0 ), 3 );
+   _Simulation->addVertex( XYZ( 1, 1, 0 ), 4 );
+   _Simulation->addVertex( XYZ( 2, 1, 0 ), 5 );
+   _Simulation->addVertex( XYZ( 3, 1.1, 0 ), 6 );
+   _Simulation->addVertex( XYZ( 2.1, 2, 0 ), 7 );
 
    ui.setupUi( this );
    ui.horizontalLayout->removeWidget( ui.drawingPlaceholder );
@@ -336,8 +391,9 @@ TileDist::TileDist( QWidget* parent )
 
    _Drawing->_OnLeftPressFunc = [&]( XYZ clickPos )
    {
-      _Simulation->_ClickedVertex = _Simulation->vertexAt( clickPos, _Drawing->toModel( 5 ) );
-      redraw();
+      _Simulation->_ClickedVertex = _Simulation->vertexAt( clickPos, _Drawing->toModel( 30 ) );
+      //redraw();
+      _Drawing->_OnMouseMoveFunc( clickPos );
    };
    _Drawing->_OnLeftReleaseFunc = [&]( XYZ clickPos )
    {
@@ -359,14 +415,128 @@ TileDist::TileDist( QWidget* parent )
          _PlayTimer.stop();
       else
          _PlayTimer.start();   
+
+      ui.playButton->setText( _PlayTimer.isActive() ? "||" : ">" );
    } );
+
+   connect( ui.tensionSlider, &QSlider::valueChanged, [this]( int value ) {
+      double t = (double) value / ui.tensionSlider->maximum();
+      //ui.outerRadiusEdit->setText( QString("%1").arg( r ) );
+      _Simulation->_Tension = interpolateExp( t, .001, 1. );
+      //updateModelFromUI();
+      redraw();
+   } );
+   ui.tensionSlider->valueChanged( ui.tensionSlider->value() );
+
+
+   connect( ui.tensionSlider, &QSlider::valueChanged, [this]( int value ) {
+      double t = (double) value / ui.tensionSlider->maximum();
+      //ui.outerRadiusEdit->setText( QString("%1").arg( r ) );
+      _Simulation->_Tension = interpolateExp( t, .001, 1. );
+      //updateModelFromUI();
+      redraw();
+   } );
+
+   connect( ui.showTriangulationCheckBox, &QCheckBox::toggled, [this]() {
+      _Drawing->_ShowTriangulation = ui.showTriangulationCheckBox->isChecked();
+      redraw();
+   } );
+   ui.showTriangulationCheckBox->toggled( ui.showTriangulationCheckBox->isChecked() );
+
+   connect( ui.uxLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_U.x = ui.uxLineEdit->text().toDouble();
+      killFocus( ui.uxLineEdit );
+      redraw();
+   } );
+   connect( ui.uyLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_U.y = ui.uyLineEdit->text().toDouble();
+      killFocus( ui.uyLineEdit );
+      redraw();
+   } );
+   connect( ui.vxLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_V.x = ui.vxLineEdit->text().toDouble();
+      killFocus( ui.vxLineEdit );
+      redraw();
+   } );
+   connect( ui.vyLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_V.y = ui.vyLineEdit->text().toDouble();
+      killFocus( ui.vyLineEdit );
+      redraw();
+   } );
+   connect( ui.minDistDiffLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_MinDistanceAllowed = ui.minDistDiffLineEdit->text().toDouble();
+      killFocus( ui.minDistDiffLineEdit );
+      redraw();
+   } );
+   connect( ui.minDistSameLineEdit, &QLineEdit::editingFinished, [this]() {
+      _Simulation->_MinDistanceAllowed_SameColor = ui.minDistSameLineEdit->text().toDouble();
+      killFocus( ui.minDistSameLineEdit );
+      redraw();
+   } );
+   ui.uxLineEdit->setText( QString::number( _Simulation->_U.x ) );
+   ui.uyLineEdit->setText( QString::number( _Simulation->_U.y ) );
+   ui.vxLineEdit->setText( QString::number( _Simulation->_V.x ) );
+   ui.vyLineEdit->setText( QString::number( _Simulation->_V.y ) );
+   ui.minDistDiffLineEdit->setText( QString::number( _Simulation->_MinDistanceAllowed ) );
+   ui.minDistSameLineEdit->setText( QString::number( _Simulation->_MinDistanceAllowed_SameColor ) );
 
 
    _PlayTimer.setInterval( 16 );
    ui.playButton->click();
+
+
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_Delete), this ), &QShortcut::activated, [this]() { deleteVertex(); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_0), this ), &QShortcut::activated, [this]() { addVertex( 0 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_R), this ), &QShortcut::activated, [this]() { addVertex( 0 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_1), this ), &QShortcut::activated, [this]() { addVertex( 1 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_B), this ), &QShortcut::activated, [this]() { addVertex( 1 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_2), this ), &QShortcut::activated, [this]() { addVertex( 2 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_Y), this ), &QShortcut::activated, [this]() { addVertex( 2 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_3), this ), &QShortcut::activated, [this]() { addVertex( 3 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_P), this ), &QShortcut::activated, [this]() { addVertex( 3 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_4), this ), &QShortcut::activated, [this]() { addVertex( 4 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_G), this ), &QShortcut::activated, [this]() { addVertex( 4 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_5), this ), &QShortcut::activated, [this]() { addVertex( 5 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_O), this ), &QShortcut::activated, [this]() { addVertex( 5 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_6), this ), &QShortcut::activated, [this]() { addVertex( 6 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_C), this ), &QShortcut::activated, [this]() { addVertex( 6 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_7), this ), &QShortcut::activated, [this]() { addVertex( 7 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_W), this ), &QShortcut::activated, [this]() { addVertex( 7 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_8), this ), &QShortcut::activated, [this]() { addVertex( 8 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_K), this ), &QShortcut::activated, [this]() { addVertex( 8 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_9), this ), &QShortcut::activated, [this]() { addVertex( 9 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::Key_N), this ), &QShortcut::activated, [this]() { addVertex( 9 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_0), this ), &QShortcut::activated, [this]() { addVertex( 10 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_1), this ), &QShortcut::activated, [this]() { addVertex( 11 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_2), this ), &QShortcut::activated, [this]() { addVertex( 12 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_3), this ), &QShortcut::activated, [this]() { addVertex( 13 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_4), this ), &QShortcut::activated, [this]() { addVertex( 14 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_5), this ), &QShortcut::activated, [this]() { addVertex( 15 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_6), this ), &QShortcut::activated, [this]() { addVertex( 16 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_7), this ), &QShortcut::activated, [this]() { addVertex( 17 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_8), this ), &QShortcut::activated, [this]() { addVertex( 18 ); } );
+   QObject::connect( new QShortcut(QKeySequence(Qt::SHIFT + Qt::Key_9), this ), &QShortcut::activated, [this]() { addVertex( 19 ); } );
 }
 
 void TileDist::redraw()
 {
    _Drawing->updateBitmap();
+}
+
+XYZ TileDist::mousePos() const
+{
+   return _Drawing->toModel( _Drawing->mapFromGlobal( QCursor::pos() ) );
+}
+
+void TileDist::addVertex( int color )
+{
+   _Simulation->addVertex( mousePos(), color );
+}
+
+void TileDist::deleteVertex()
+{
+   VertexPtr a = _Simulation->vertexAt( mousePos(), _Drawing->toModel( 30 ) );
+   if ( !a )
+      return;
+   _Simulation->deleteVertex( a );
 }

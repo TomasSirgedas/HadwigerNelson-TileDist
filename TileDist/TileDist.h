@@ -17,6 +17,9 @@ class TileDist : public QWidget
 public:
    TileDist( QWidget* parent = Q_NULLPTR );
    void redraw();
+   void addVertex( int color );
+   XYZ mousePos() const;
+   void deleteVertex();
 
 private:
    Ui::TileDistClass ui;

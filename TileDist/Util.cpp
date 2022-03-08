@@ -25,3 +25,13 @@ double signedArea( const QPolygonF& poly )
 
    return area2 / 2;
 }
+
+double lerp( double t, double minVal, double maxVal )
+{
+   return minVal + (maxVal - minVal) * t;
+}
+
+double interpolateExp( double t, double minVal, double maxVal )
+{
+   return exp( lerp( t, log( minVal ), log( maxVal ) ) );
+}
