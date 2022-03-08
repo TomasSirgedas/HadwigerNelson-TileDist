@@ -296,6 +296,7 @@ public:
    void updateBitmap()
    {
       _ModelToBitmap = Matrix4x4::translation( XYZ( width()/2, height()/2, 0 ) ) * Matrix4x4::scale( XYZ( 100, 100, 1 ) ) * Matrix4x4::scale( XYZ( 1, -1, 1 ) );
+      _ModelToBitmap = _ModelToBitmap * Matrix4x4::translation( (_Simulation->_U + _Simulation->_V) * -.5 );
 
       auto toBitmap = [&]( const XYZ& pt ) { return toPointF( (_ModelToBitmap * pt).toXYZ() ); };
 
